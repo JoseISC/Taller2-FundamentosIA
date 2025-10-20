@@ -159,6 +159,15 @@ to crear-mundo
     if random-float 1.0 < pit-prob [
       set tiene-pozo? true
       set pcolor blue
+      
+      ; Agregar brisa a las casillas adyacentes
+      ask neighbors4 [
+        set hay-brisa? true
+        ; Si no es salida, pozo, wumpus u oro, marcar con brisa (celeste muy claro)
+        if not es-salida? and not tiene-pozo? and not tiene-oro? [
+          set pcolor sky
+        ]
+      ]
     ]
   ]
   
@@ -208,6 +217,10 @@ to calcular-percepciones
   ; Brisa si hay pozo adyacente
   if any? neighbors4 with [tiene-pozo?] [
     set hay-brisa? true
+    ; Marcar visualmente con brisa (celeste muy claro) si no es otro elemento importante
+    if not es-salida? and not tiene-pozo? and not tiene-wumpus? and not tiene-oro? [
+      set pcolor sky
+    ]
   ]
   
   ; Hedor si hay wumpus adyacente
@@ -365,10 +378,15 @@ to estrategia-reactivo-baseline
     stop
   ]
   
-  ; Evitar peligros obvios: si percibe brisa o hedor, no avanzar
+  ; Evitar peligros obvios: si percibe brisa o hedor, buscar dirección segura
   if agente-percibe-brisa? or agente-percibe-hedor? [
-    ; Girar en dirección aleatoria
+    let direccion-segura buscar-direccion-segura
+    ifelse direccion-segura != -1 [
+      girar-hacia direccion-segura
+    ] [
+      ; Si no hay dirección segura, girar aleatoriamente
     girar-hacia random 4
+    ]
   ]
   
   ; Intentar moverse
@@ -411,18 +429,27 @@ to estrategia-reactivo-heuristico
   ; Buscar mejor movimiento heurístico
   let mejor-celda elegir-mejor-celda-heuristica
   
-  if mejor-celda != nobody [
+  ifelse mejor-celda != nobody [
     moverse-hacia mejor-celda
+  ] [
+    ; Si no hay celda heurística, buscar dirección segura
+    let direccion-segura buscar-direccion-segura
+    ifelse direccion-segura != -1 [
+      girar-hacia direccion-segura
+      mover-adelante
+    ] [
+      ; Último recurso: girar aleatoriamente
+      girar-hacia random 4
+    ]
   ]
 end
 
 to-report elegir-mejor-celda-heuristica
-  ; Evaluar celdas adyacentes
-  let candidatas neighbors4 with [not visitado?]
+  ; Evaluar celdas adyacentes - incluir tanto visitadas como no visitadas
+  let candidatas neighbors4
   
   if not any? candidatas [
-    ; Si no hay candidatas, retroceder
-    report one-of neighbors4 with [visitado?]
+    report nobody
   ]
   
   ; Calcular score heurístico para cada celda
@@ -431,33 +458,55 @@ to-report elegir-mejor-celda-heuristica
   
   ask candidatas [
     let score calcular-score-heuristico
+    
+    ; Bonus adicional para celdas no visitadas (exploración)
+    if not visitado? [ set score score + 20 ]
+    
+    ; Penalizar celdas con peligros conocidos
+    if tiene-pozo? or tiene-wumpus? [ set score score - 500 ]
+    
     if score > mejor-score [
       set mejor-score score
       set mejor-celda self
     ]
   ]
   
+  ; Solo reportar si el score es razonable (no demasiado peligroso)
+  ifelse mejor-score > -100 [
   report mejor-celda
+  ] [
+    report nobody
+  ]
 end
 
 to-report calcular-score-heuristico
   let score 0
   
-  ; Penalizar si tiene señales de peligro
-  if hay-brisa? [ set score score - 50 ]
-  if hay-hedor? [ set score score - 30 ]
+  ; Penalizar fuertemente si tiene señales de peligro
+  if hay-brisa? [ set score score - 100 ] ; Muy peligroso
+  if hay-hedor? [ set score score - 80 ]  ; Muy peligroso
+  
+  ; Penalizar si hay peligros conocidos
+  if tiene-pozo? [ set score score - 200 ] ; Mortal
+  if tiene-wumpus? [ set score score - 200 ] ; Mortal
   
   ; Bonus si no ha sido visitado
-  if not visitado? [ set score score + 20 ]
+  if not visitado? [ set score score + 30 ]
   
   ; Bonus por estar lejos de la salida (exploración)
   let distancia-salida distancexy 0 0
-  set score score + distancia-salida * 5
+  set score score + distancia-salida * 3
   
   ; Penalizar si está en el borde
   if pxcor = 0 or pxcor = (max-pxcor) or pycor = 0 or pycor = (max-pycor) [
-    set score score - 10
+    set score score - 15
   ]
+  
+  ; Bonus si es la salida (cuando tiene oro)
+  if es-salida? [ set score score + 50 ]
+  
+  ; Bonus si tiene oro
+  if tiene-oro? [ set score score + 1000 ]
   
   report score
 end
@@ -515,6 +564,174 @@ to-report hacia-direccion [origen destino]
   if delta-y > 0 [ report 0 ] ; norte
   if delta-y < 0 [ report 2 ] ; sur
   report 0
+end
+
+to-report buscar-direccion-segura
+  ; Analizar las 4 direcciones posibles
+  let direcciones-seguras []
+  
+  ; Verificar cada dirección (0=norte, 1=este, 2=sur, 3=oeste)
+  let direcciones [0 1 2 3]
+  
+  foreach direcciones [ x ->
+    let dir x
+    let celda-destino patch-ahead-en-direccion dir 1
+    
+    if celda-destino != nobody [
+      ; Verificar si la celda de destino es segura
+      let es-segura true
+      
+      ; Verificar si hay brisa o hedor en la celda de destino
+      if [hay-brisa?] of celda-destino or [hay-hedor?] of celda-destino [
+        set es-segura false
+      ]
+      
+      ; Verificar si hay peligros conocidos
+      if [tiene-pozo?] of celda-destino or [tiene-wumpus?] of celda-destino [
+        set es-segura false
+      ]
+      
+      ; Si es segura, agregarla a la lista
+      if es-segura [
+        set direcciones-seguras lput dir direcciones-seguras
+      ]
+    ]
+  ]
+  
+  ; Si hay direcciones seguras, elegir una aleatoriamente
+  ifelse length direcciones-seguras > 0 [
+    report one-of direcciones-seguras
+  ] [
+    ; Si no hay direcciones seguras, buscar la menos peligrosa
+    let mejor-direccion -1
+    let menor-peligro 999
+    
+    foreach direcciones [ x ->
+      let dir x
+      let celda-destino patch-ahead-en-direccion dir 1
+      
+      if celda-destino != nobody [
+        let nivel-peligro 0
+        
+        ; Calcular nivel de peligro
+        if [hay-brisa?] of celda-destino [ set nivel-peligro nivel-peligro + 2 ]
+        if [hay-hedor?] of celda-destino [ set nivel-peligro nivel-peligro + 3 ]
+        if [tiene-pozo?] of celda-destino [ set nivel-peligro nivel-peligro + 10 ]
+        if [tiene-wumpus?] of celda-destino [ set nivel-peligro nivel-peligro + 10 ]
+        
+        ; Bonus si ya fue visitada (más segura)
+        if [visitado?] of celda-destino [ set nivel-peligro nivel-peligro - 1 ]
+        
+        if nivel-peligro < menor-peligro [
+          set menor-peligro nivel-peligro
+          set mejor-direccion dir
+        ]
+      ]
+    ]
+    
+    report mejor-direccion
+  ]
+end
+
+to-report patch-ahead-en-direccion [dir distancia]
+  let distancia-x 0
+  let distancia-y 0
+  
+  ; Calcular offset según dirección
+  if dir = 0 [ set distancia-y 1 ] ; norte
+  if dir = 1 [ set distancia-x 1 ] ; este  
+  if dir = 2 [ set distancia-y -1 ] ; sur
+  if dir = 3 [ set distancia-x -1 ] ; oeste
+  
+  ; Calcular coordenadas de destino
+  let x-destino pxcor + (dx * distancia)
+  let y-destino pycor + (dy * distancia)
+  
+  ; Verificar si está dentro del mundo
+  ifelse x-destino >= min-pxcor and x-destino <= max-pxcor and 
+         y-destino >= min-pycor and y-destino <= max-pycor [
+    report patch x-destino y-destino
+  ] [
+    report nobody
+  ]
+end
+
+to-report elegir-mejor-destino-wumpus
+  ; Evaluar todas las celdas adyacentes
+  let candidatas neighbors4
+  
+  if not any? candidatas [
+    report nobody
+  ]
+  
+  ; Filtrar celdas seguras (sin pozos y no es salida)
+  let celdas-seguras candidatas with [not tiene-pozo? and not es-salida?]
+  
+  ifelse any? celdas-seguras [
+    ; Si hay celdas seguras, elegir la mejor
+    let mejor-score -9999
+    let mejor-destino nobody
+    
+    ask celdas-seguras [
+      let score calcular-score-destino-wumpus
+      
+      if score > mejor-score [
+        set mejor-score score
+        set mejor-destino self
+      ]
+    ]
+    
+    report mejor-destino
+  ] [
+    ; Si no hay celdas seguras, buscar la menos peligrosa
+    let mejor-score -9999
+    let mejor-destino nobody
+    
+    ask candidatas [
+      let score calcular-score-destino-wumpus
+      
+      ; Penalizar fuertemente pozos y salida
+      if tiene-pozo? [ set score score - 1000 ]
+      if es-salida? [ set score score - 500 ]
+      
+      if score > mejor-score [
+        set mejor-score score
+        set mejor-destino self
+      ]
+    ]
+    
+    ; Solo reportar si no es un pozo o salida
+    ifelse [tiene-pozo?] of mejor-destino or [es-salida?] of mejor-destino [
+      report nobody ; No moverse si solo hay opciones peligrosas
+    ] [
+      report mejor-destino
+    ]
+  ]
+end
+
+to-report calcular-score-destino-wumpus
+  let score 0
+  
+  ; Bonus por estar lejos de la salida (evitar salida)
+  let distancia-salida distancexy 0 0
+  set score score + distancia-salida * 2
+  
+  ; Bonus si no ha sido visitada por el agente (exploración)
+  if not visitado? [ set score score + 10 ]
+  
+  ; Bonus si está cerca del centro del mundo
+  let distancia-centro distancexy (max-pxcor / 2) (max-pycor / 2)
+  set score score + (10 - distancia-centro)
+  
+  ; Penalizar si está en el borde
+  if pxcor = 0 or pxcor = (max-pxcor) or pycor = 0 or pycor = (max-pycor) [
+    set score score - 5
+  ]
+  
+  ; Bonus aleatorio para movimiento impredecible
+  set score score + random-float 5
+  
+  report score
 end
 
 ; ==========================================
@@ -902,17 +1119,17 @@ to mover-wumpus
   let wumpus-movido false
   
   ask wumpuses with [vivo?] [
-    if random-float 1.0 < 0.75 [ ; 20% de probabilidad de moverse
-      let destino one-of neighbors4 with [not tiene-pozo? and not es-salida?]
+    if random-float 1.0 < 0.75 [ ; 75% de probabilidad de moverse
+      let mejor-destino elegir-mejor-destino-wumpus
       
-      if destino != nobody [
+      if mejor-destino != nobody [
         ; Mover Wumpus
         ask patch-here [
           set tiene-wumpus? false
           if pcolor = red [ set pcolor white ]
         ]
         
-        move-to destino
+        move-to mejor-destino
         
         ask patch-here [
           set tiene-wumpus? true
@@ -926,11 +1143,10 @@ to mover-wumpus
   
   ; Recalcular hedores solo si un wumpus se movió
   if wumpus-movido [
-        ask patches [ set hay-hedor? false ]
-        ask patches [
-          if any? neighbors4 with [tiene-wumpus?] [
-            set hay-hedor? true
-      ]
+    ask patches [ 
+      set hay-hedor? false
+      ; Recalcular percepciones para mantener brisa correcta
+      calcular-percepciones
     ]
   ]
 end
@@ -1052,11 +1268,11 @@ to run-experiments
   print (word "Flechas usadas: " flechas-usadas-total)
 end]]></code>
   <widgets>
-    <view x="368" wrappingAllowedX="true" y="10" frameRate="30.0" minPycor="0" height="182" showTickCounter="true" patchSize="30.0" fontSize="10" wrappingAllowedY="true" width="182" tickCounterLabel="ticks" maxPycor="5" updateMode="0" maxPxcor="5" minPxcor="0"></view>
-    <slider x="40" step="1" y="40" max="100" width="250" display="grid-size" height="50" min="0" direction="Horizontal" default="6.0" variable="grid-size"></slider>
+    <view x="368" wrappingAllowedX="true" y="10" frameRate="30.0" minPycor="0" height="390" showTickCounter="true" patchSize="30.0" fontSize="10" wrappingAllowedY="true" width="390" tickCounterLabel="ticks" maxPycor="12" updateMode="0" maxPxcor="12" minPxcor="0"></view>
+    <slider x="40" step="1" y="40" max="100" width="250" display="grid-size" height="50" min="0" direction="Horizontal" default="13.0" variable="grid-size"></slider>
     <slider x="40" step="0.05" y="170" max="0.3" width="250" display="pit-prob" height="50" min="0" direction="Horizontal" default="0.15" variable="pit-prob"></slider>
     <slider x="40" step="1" y="105" max="100" width="250" display="seed" height="50" min="0" direction="Horizontal" default="37.0" variable="seed"></slider>
-    <chooser x="1130" y="25" height="60" variable="current-agent-strategy" current="0" width="250" display="current-agent-strategy">
+    <chooser x="1130" y="25" height="60" variable="current-agent-strategy" current="1" width="250" display="current-agent-strategy">
       <choice type="string" value="reactivo-baseline"></choice>
       <choice type="string" value="reactivo-heuristico"></choice>
       <choice type="string" value="modelo-interno"></choice>
