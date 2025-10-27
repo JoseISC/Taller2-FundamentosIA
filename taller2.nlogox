@@ -93,19 +93,22 @@ wumpuses-own [
 ; ==========================================
 
 to setup [is-experiment]
-  ;clear-all - basura
+  ; Limpiar solo lo necesario
   clear-ticks
   clear-turtles
   clear-patches
   clear-drawing
-  clear-all-plots
-  clear-output
+  
+  ; NO limpiar plots si es experimento
+  if not is-experiment [
+    clear-all-plots
+    clear-output
+  ]
   
   reset-ticks
   
-  ; Inicializar métricas
-  if not is-experiment 
-  [
+  ; Solo resetear métricas si NO es un experimento
+  if not is-experiment [
     set episodios-completados 0
     set exitos-totales 0
     set muertes-pozo 0
@@ -114,13 +117,10 @@ to setup [is-experiment]
     set recompensa-acumulada 0
     set pasos-acumulados 0
     set flechas-usadas-total 0
+    set lista-recompensas []
+    set lista-pasos []
+    set lista-exitos []
   ]
-  
-
-  
-  set lista-recompensas []
-  set lista-pasos []
-  set lista-exitos []
   
   ; Inicializar control de hedores
   set global-wumpus-muerto false
@@ -139,6 +139,7 @@ to setup [is-experiment]
   ; Iniciar episodio
   iniciar-episodio
 end
+
 
 ; ==========================================
 ; CREAR MUNDO
@@ -165,7 +166,7 @@ to crear-mundo
     set celda-segura? false
   ]
   
-  
+  ; Establecer salida (esquina inferior izquierda)
   set exit-patch one-of patches
   ask exit-patch [
     set es-salida? true
@@ -325,8 +326,8 @@ end
 ; ==========================================
 
 to go
+  ; Verificar si el episodio ya terminó
   if not agente-vivo? or salio-cueva? [
-    finalizar-episodio
     stop
   ]
   
@@ -344,7 +345,7 @@ to go
   set pasos-episodio pasos-episodio + 1
   set recompensa-episodio recompensa-episodio - 1 ; Costo por paso
   
-  ; Verificar condiciones de fin
+  ; Verificar condiciones de fin ANTES de continuar
   verificar-estado-agente
   
   ; Eliminar hedores si se mató al Wumpus
@@ -361,6 +362,11 @@ to go
   if pasos-episodio > (grid-size * grid-size * 3) [
     set agente-vivo? false
     print "Muerte por limite de pasos"
+  ]
+  
+  ; Finalizar episodio si corresponde
+  if not agente-vivo? or salio-cueva? [
+    finalizar-episodio
   ]
 end
 
@@ -397,20 +403,20 @@ to estrategia-reactivo-baseline
   ]
   
   ; Si tiene oro, intentar volver a la salida
+  ; Si tiene oro, intentar volver a la salida aleatoriamente
   if agente-tiene-oro? [
     if [es-salida?] of patch-here [
       salir-cueva
       stop
     ]
-    ; Moverse hacia la salida (dirección general)
-    let distancia-x pxcor
-    let distancia-y pycor
-    ifelse distancia-x > distancia-y [
-      girar-hacia 3 ; oeste
+    ; Movimiento aleatorio para intentar salir
+    girar-hacia random 4
+    ifelse puede-mover-adelante? [
+      mover-adelante
     ] [
-      girar-hacia 2 ; sur
+      ; Si no puede moverse en esa dirección, intentar otra
+      girar-hacia random 4
     ]
-    mover-adelante
     stop
   ]
   
@@ -439,7 +445,6 @@ to estrategia-reactivo-baseline
     girar-hacia random 4
   ]
 end
-
 ; ==========================================
 ; ESTRATEGIA 2: REACTIVO HEURÍSTICO
 ; ==========================================
@@ -935,6 +940,7 @@ to disparar-hacia-celda [celda-objetivo]
   disparar-flecha
 end
 
+
 ; ==========================================
 ; FUNCIONES AUXILIARES PARA TABLAS
 ; ==========================================
@@ -1069,10 +1075,8 @@ to salir-cueva
     
     ifelse agente-tiene-oro? [
       set recompensa-episodio recompensa-episodio + 100
-      print "Salio de cueva con el oro"
     ] [
       set recompensa-episodio recompensa-episodio - 10
-      print "Salio de la cueva sin el oro"
     ]
   ]
 end
@@ -1158,27 +1162,24 @@ end
 to verificar-estado-agente
   ask agentes [
     ; Verificar muerte por pozo
-    if [tiene-pozo?] of patch-here [
+    if [tiene-pozo?] of patch-here and agente-vivo? [
       set agente-vivo? false
       set recompensa-episodio recompensa-episodio - 1000
       set muertes-pozo muertes-pozo + 1
       print "Muerte por pozo"
-      print recompensa-episodio
-      die
+      print (word "Recompensa episodio: " recompensa-episodio)
     ]
     
     ; Verificar muerte por Wumpus
-    if [tiene-wumpus?] of patch-here and any? wumpuses-here with [vivo?] [
+    if [tiene-wumpus?] of patch-here and any? wumpuses-here with [vivo?] and agente-vivo? [
       set agente-vivo? false
       set recompensa-episodio recompensa-episodio - 1000
       set muertes-wumpus muertes-wumpus + 1
       print "Muerte por Wumpus"
-      print recompensa-episodio
-      die
+      print (word "Recompensa episodio: " recompensa-episodio)
     ]
   ]
 end
-
 ; ==========================================
 ; MOVER WUMPUS (OPCIONAL)
 ; ==========================================
@@ -1224,30 +1225,54 @@ end
 ; ==========================================
 
 to finalizar-episodio
+  if length lista-pasos > 0 [
+    if episodio-actual <= episodios-completados [
+      stop
+    ]
+  ]
+  
   ; Actualizar métricas globales
   set episodios-completados episodios-completados + 1
   
-  
+  ; Verificar éxito
   if oro-encontrado? and salio-cueva? [
-    print "Éxito"
     set exitos-totales exitos-totales + 1
     set oro-recolectado oro-recolectado + 1
+    print "Éxito - Oro recolectado y salió de la cueva"
   ]
   
+  ; Acumular métricas
   set recompensa-acumulada recompensa-acumulada + recompensa-episodio
   set pasos-acumulados pasos-acumulados + pasos-episodio
   
-  ; Agregar a listas
+  ; Agregar a listas para análisis
   set lista-recompensas lput recompensa-episodio lista-recompensas
   set lista-pasos lput pasos-episodio lista-pasos
   set lista-exitos lput (ifelse-value (oro-encontrado? and salio-cueva?) [1] [0]) lista-exitos
   
-  ; Actualizar plots con los valores del episodio recién finalizado
-  update-plots
+  ; Imprimir resumen del episodio
+  print "===================="
+  print (word "Episodio " episodios-completados " finalizado")
+  print (word "Pasos: " pasos-episodio)
+  print (word "Recompensa: " recompensa-episodio)
+  print (word "Estado: " (ifelse-value (oro-encontrado? and salio-cueva?) ["ÉXITO"] 
+                                       (not agente-vivo?) ["MUERTE"] 
+                                       ["INCOMPLETO"]))
+  print "===================="
   
-  ; Preparar siguiente episodio si está en modo batch
-  if episodios-completados < num-episodios [
-    setup true
+  ; Actualizar plots manualmente
+  set-current-plot "Tasa de éxito"
+  plot tasa-exito
+  
+  set-current-plot "Recompensa promedio"
+  plot recompensa-promedio
+  
+  set-current-plot "Pasos promedio"
+  plot pasos-promedio
+  
+  ; Eliminar agentes muertos
+  ask agentes [
+    die
   ]
 end
 
@@ -1298,8 +1323,9 @@ end
 ; ==========================================
 ; RESETEAR MÉTRICAS
 ; ==========================================
-
 to reset-metrics
+  print "Reseteando métricas..."
+  
   set episodios-completados 0
   set exitos-totales 0
   set muertes-pozo 0
@@ -1313,13 +1339,17 @@ to reset-metrics
   set lista-pasos []
   set lista-exitos []
   
-  ; Limpiar plots
+  ; Limpiar todos los plots
   set-current-plot "Tasa de éxito"
   clear-plot
+  
   set-current-plot "Recompensa promedio"
   clear-plot
+  
   set-current-plot "Pasos promedio"
   clear-plot
+  
+  print "Métricas reseteadas correctamente"
 end
 
 ; ==========================================
@@ -1327,62 +1357,92 @@ end
 ; ==========================================
 
 to run-experiments
-  ;reset-metrics
+  ; Resetear métricas al inicio
+  reset-metrics
+  
+  print (word "=== INICIANDO EXPERIMENTOS ===")
+  print (word "Estrategia: " current-agent-strategy)
+  print (word "Número de episodios: " num-episodios)
+  print (word "Tamaño del grid: " grid-size)
+  print (word "Probabilidad de pozos: " pit-prob)
+  print "==============================="
+  
+  let contador-episodios 0
   
   repeat num-episodios [
+    set contador-episodios contador-episodios + 1
+    print (word ">>> INICIANDO EPISODIO " contador-episodios " <<<")
+    
     setup true
-    ;print episodios-completados ;debug
+    
+    ; Ejecutar episodio completo
     while [agente-vivo? and not salio-cueva? and pasos-episodio < (grid-size * grid-size * 3)] [
       go
     ]
-    if not salio-cueva? [ finalizar-episodio ]
+    
+    finalizar-episodio
   ]
   
   ; Mostrar resultados finales
-  print (word "=== RESULTADOS FINALES ===")
+  print ""
+  print "=== RESULTADOS FINALES ==="
   print (word "Estrategia: " current-agent-strategy)
-  print (word "Episodios éxitosos: " episodios-completados)
+  print (word "Episodios completados: " episodios-completados)
   print (word "Tasa de éxito: " precision tasa-exito 2 "%")
+  print (word "Éxitos totales: " exitos-totales)
   print (word "Recompensa promedio: " precision recompensa-promedio 2)
+  print (word "Recompensa acumulada: " recompensa-acumulada)
   print (word "Pasos promedio: " precision pasos-promedio 2)
-  print (word "Muertes por pozo: " precision porcentaje-muertes-pozo 2 "%")
-  print (word "Muertes por Wumpus: " precision porcentaje-muertes-wumpus 2 "%")
+  print (word "Pasos acumulados: " pasos-acumulados)
+  print (word "Muertes por pozo: " muertes-pozo " (" precision porcentaje-muertes-pozo 2 "%)")
+  print (word "Muertes por Wumpus: " muertes-wumpus " (" precision porcentaje-muertes-wumpus 2 "%)")
+  print (word "Oro recolectado: " oro-recolectado)
   print (word "Flechas usadas: " flechas-usadas-total)
+  print "=========================="
 end
 
-to actualizar-graficos
-  ; Dibuja los valores actuales en cada plot
-  set-current-plot "Tasa de éxito"
-  plot tasa-exito
+; ==========================================
+; DIAGNÓSTICO DE MÉTRICAS
+; ==========================================
 
-  set-current-plot "Recompensa promedio"
-  plot recompensa-promedio
+to diagnosticar-metricas
+  print ""
+  print "=== DIAGNÓSTICO DE MÉTRICAS ==="
+  print (word "Episodios completados: " episodios-completados)
+  print (word "Éxitos totales: " exitos-totales)
+  print (word "Muertes por pozo: " muertes-pozo)
+  print (word "Muertes por Wumpus: " muertes-wumpus)
+  print (word "Longitud lista recompensas: " length lista-recompensas)
+  print (word "Longitud lista pasos: " length lista-pasos)
+  print (word "Longitud lista éxitos: " length lista-exitos)
+  
+  ; Verificar coherencia
+  let suma-resultados (exitos-totales + muertes-pozo + muertes-wumpus)
+  print (word "Suma de resultados: " suma-resultados)
+  print (word "Diferencia con episodios: " (episodios-completados - suma-resultados))
+  
+  if episodios-completados > 0 [
+    print ""
+    print "Últimos 5 episodios:"
+    let inicio max (list 0 (length lista-recompensas - 5))
+    let sublista sublist lista-recompensas inicio length lista-recompensas
+    print (word "Recompensas: " sublista)
+  ]
+  print "==============================="
+end
 
-  set-current-plot "Pasos promedio"
-  plot pasos-promedio
-end]]></code>
+]]></code>
   <widgets>
-    <view x="368" wrappingAllowedX="true" y="10" frameRate="30.0" minPycor="0" height="240" showTickCounter="true" patchSize="30.0" fontSize="10" wrappingAllowedY="true" width="240" tickCounterLabel="ticks" maxPycor="7" updateMode="0" maxPxcor="7" minPxcor="0"></view>
-    <slider x="40" step="1" y="40" max="100" width="250" display="grid-size" height="50" min="0" direction="Horizontal" default="8.0" variable="grid-size"></slider>
-    <slider x="40" step="0.05" y="170" max="0.3" width="250" display="pit-prob" height="50" min="0" direction="Horizontal" default="0.05" variable="pit-prob"></slider>
-    <slider x="40" step="1" y="105" max="100" width="250" display="seed" height="50" min="0" direction="Horizontal" default="81.0" variable="seed"></slider>
-    <chooser x="1130" y="25" height="60" variable="current-agent-strategy" current="1" width="250" display="current-agent-strategy">
-      <choice type="string" value="reactivo-baseline"></choice>
-      <choice type="string" value="reactivo-heuristico"></choice>
-      <choice type="string" value="modelo-interno"></choice>
-    </chooser>
-    <slider x="1130" step="1" y="95" max="500" width="250" display="num-episodios" height="50" min="0" direction="Horizontal" default="132.0" variable="num-episodios"></slider>
-    <switch x="1265" y="155" height="40" on="false" variable="wumpus-movil" width="115" display="wumpus-movil"></switch>
-    <button x="1145" y="445" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55" display="GO!">go</button>
-    <button x="1145" y="495" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55" display="SETUP!">setup false</button>
-    <button x="1230" y="450" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="106">run-experiments</button>
-    <button x="1230" y="500" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="90" display="reset-metrics">reset-metrics</button>
+    <view x="368" wrappingAllowedX="false" y="10" frameRate="30.0" minPycor="0" height="124" showTickCounter="true" patchSize="30.0" fontSize="10" wrappingAllowedY="false" width="124" tickCounterLabel="ticks" maxPycor="3" updateMode="1" maxPxcor="3" minPxcor="0"></view>
+    <slider x="40" step="1" y="40" max="100" width="250" display="grid-size" height="50" min="0" direction="Horizontal" default="4.0" variable="grid-size"></slider>
+    <slider x="40" step="0.05" y="170" max="0.3" width="250" display="pit-prob" height="50" min="0" direction="Horizontal" default="0.1" variable="pit-prob"></slider>
+    <slider x="40" step="1" y="105" max="100" width="250" display="seed" height="50" min="0" direction="Horizontal" default="0.0" variable="seed"></slider>
     <plot x="835" autoPlotX="true" yMax="3.0" autoPlotY="true" y="20" xMin="0.0" height="175" legend="false" xMax="3.0" yMin="0.0" width="230" display="Tasa de éxito">
       <setup></setup>
       <update></update>
       <pen interval="1.0" mode="0" display="default" color="-1184463" legend="true">
         <setup></setup>
-        <update>plot count turtles</update>
+        <update>plot tasa-exito</update>
       </pen>
     </plot>
     <plot x="830" autoPlotX="true" yMax="3.0" autoPlotY="true" y="225" xMin="0.0" height="175" legend="false" xMax="3.0" yMin="0.0" width="230" display="Recompensa promedio">
@@ -1390,15 +1450,27 @@ end]]></code>
       <update></update>
       <pen interval="1.0" mode="0" display="default" color="-13840069" legend="true">
         <setup></setup>
-        <update>plot count turtles</update>
+        <update>plot recompensa-promedio</update>
       </pen>
     </plot>
-    <plot x="1095" autoPlotX="true" yMax="3.0" autoPlotY="true" y="230" xMin="0.0" height="175" legend="false" xMax="3.0" yMin="0.0" width="230" display="Pasos promedio">
+    <chooser x="40" y="235" height="60" variable="current-agent-strategy" current="0" width="250" display="current-agent-strategy">
+      <choice type="string" value="reactivo-baseline"></choice>
+      <choice type="string" value="reactivo-heuristico"></choice>
+      <choice type="string" value="modelo-interno"></choice>
+    </chooser>
+    <slider x="40" step="1" y="310" max="500" width="250" display="num-episodios" height="50" min="0" direction="Horizontal" default="300.0" variable="num-episodios"></slider>
+    <switch x="40" y="375" height="40" on="true" variable="wumpus-movil" width="115" display="wumpus-movil"></switch>
+    <button x="40" y="475" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55" display="SETUP!">setup false</button>
+    <button x="40" y="425" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="56" display="GO!">go</button>
+    <button x="105" y="475" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="90" display="reset-metrics">reset-metrics</button>
+    <button x="105" y="425" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="106">run-experiments</button>
+    <button x="205" y="475" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="135">diagnosticar-metricas</button>
+    <plot x="1080" autoPlotX="true" yMax="3.0" autoPlotY="true" y="20" xMin="0.0" height="175" legend="false" xMax="3.0" yMin="0.0" width="230" display="Pasos promedio">
       <setup></setup>
       <update></update>
       <pen interval="1.0" mode="0" display="default" color="-8630108" legend="true">
         <setup></setup>
-        <update>plot count turtles</update>
+        <update>plot pasos-promedio</update>
       </pen>
     </plot>
   </widgets>
